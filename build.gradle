@@ -1,0 +1,24 @@
+group 'co.wecommit'
+version '1.0-SNAPSHOT'
+
+apply plugin: 'java'
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenCentral()
+}
+
+project.ext {
+    neo4j_version= "3.2.2"
+}
+
+dependencies {
+    testCompile group: 'junit', name: 'junit', version: '4.12'
+
+    compileOnly group: "org.neo4j", name: "neo4j", version: project.neo4j_version
+    compileOnly group: "org.neo4j", name: "neo4j-graphdb-api", version: project.neo4j_version
+    testCompile group: 'org.neo4j.test', name: 'neo4j-harness', version: project.neo4j_version
+
+
+}
