@@ -1,5 +1,6 @@
 package co.wecommit.journeyplanning;
 
+import co.wecommit.journeyplanning.evaluators.IsValidLegEvaluator;
 import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.traversal.*;
 
@@ -22,11 +23,11 @@ public class FindServices {
         graph = db;
     }
 
-    public ArrayList<Journey> between(String start_reference, String end_reference) {
+    public ArrayList<Journey> between(String start_reference, String end_reference, Long depart_after, Long arrive_before, Long threshold) {
         Node origin = graph.findNode(Station, "reference", start_reference);
         Node destination = graph.findNode(Station, "reference", end_reference);
 
-        return between(origin, destination);
+        return between(origin, destination, depart_after, arrive_before, threshold);
     }
 
     /**
@@ -72,23 +73,19 @@ public class FindServices {
      * @param origin
      * @param destination
      */
-    public ArrayList<Journey> between(Node origin, Node destination) {
+    public ArrayList<Journey> between(Node origin, Node destination, Long depart_after, Long arrive_before, Long threshold) {
         ArrayList<Journey> output = new ArrayList<Journey>();
 
-        Long depart_after = new Double(6.5*60).longValue();
-        Long arrive_before =  new Double(9*60).longValue();
-        Long threshold = new Integer(60).longValue();
 
         ArrayList<Node> starting = getStartLegs(origin, "departs_at", depart_after, depart_after + threshold);
 
-
         for ( Node start_leg : starting ) {
-            System.out.println(start_leg.getId());
-
             // Get all endings that depart after this leg this but before the arrival time
-            Long departs_at = (Long) start_leg.getProperty("departs_at");
+            Object departs_at = start_leg.getProperty("departs_at");
 
-            ArrayList<Node> ending = getEndLegs(destination, "arrives_at", departs_at + threshold, arrive_before);
+            ArrayList<Node> ending = getEndLegs(destination, "arrives_at", arrive_before - threshold, arrive_before);
+
+            System.out.println(start_leg.getId() + " - "+ ending.size());
 
             for ( Node end_leg : ending ) {
                 System.out.println("to: "+ end_leg.getId());
@@ -101,12 +98,12 @@ public class FindServices {
 
                         legs.add(details);
                     }
-
                 }
 
-                Journey journey = new Journey(origin, destination, legs);
-
-                output.add(journey);
+                if ( legs.size() > 0 ) {
+                    Journey journey = new Journey(origin, destination, legs);
+                    output.add(journey);
+                }
             }
         }
 
@@ -127,6 +124,12 @@ public class FindServices {
             this.legs = legs;
         }
 
+        private Date getDate(Node node, String property) {
+            Long value = ((Number) node.getProperty(property,0)).longValue();
+
+            return new Date( value * 60 * 1000 );
+        }
+
         public String toString() {
             String output = "\n\nJourney: "+ origin.getProperty("name") + " to "+ destination.getProperty("name") + "\n--\n";
 
@@ -137,10 +140,9 @@ public class FindServices {
                 Node station = leg.get("station");
                 Node platform = leg.get("platform");
 
-                Date departs_at = new Date( (Long) leg_node.getProperty("departs_at")*60*1000 );
+                Date departs_at = getDate(leg_node, "departs_at");
 
                 output += "-- "+ time.format(departs_at);
-
                 output += " " + station.getProperty("name") + " P. "+ platform.getProperty("number");
 
 
@@ -152,7 +154,7 @@ public class FindServices {
 
             HashMap<String, Node> last_leg = legs.get(legs.size() - 1);
 
-            Date arrives_at = new Date( (Long) last_leg.get("leg").getProperty("arrives_at")*60*1000 );
+            Date arrives_at = getDate(last_leg.get("leg"), "arrives_at");
 
             output += "Arrives at "+ destination.getProperty("name") + " at "+ time.format(arrives_at);
 
@@ -199,15 +201,12 @@ public class FindServices {
                 .depthFirst()
                 .relationships(Relationships.HAS_PLATFORM, Direction.OUTGOING)
                 .relationships(Relationships.CAN_BOARD, Direction.OUTGOING)
-                .evaluator(Evaluators.atDepth(2));
+                .evaluator( new IsValidLegEvaluator(2, property, floor, ceiling));
 
         for ( Path path : traversal.traverse(station) ) {
             Node leg = path.endNode();
-            Long value = (Long) leg.getProperty(property);
 
-            if ( value >= floor && value <= ceiling ) {
-                output.add(leg);
-            }
+            output.add(leg);
         }
 
         return output;
@@ -228,15 +227,11 @@ public class FindServices {
                 .depthFirst()
                 .relationships(Relationships.HAS_PLATFORM, Direction.OUTGOING)
                 .relationships(Relationships.CAN_ALIGHT, Direction.INCOMING)
-                .evaluator(Evaluators.atDepth(2));
+                .evaluator( new IsValidLegEvaluator(2, property, floor, ceiling));
 
         for ( Path path : traversal.traverse(station) ) {
             Node leg = path.endNode();
-            Long value = (Long) leg.getProperty(property);
-
-            if ( value >= floor && value <= ceiling ) {
-                output.add(leg);
-            }
+            output.add(leg);
         }
 
         return output;
