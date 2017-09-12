@@ -1,6 +1,10 @@
 package co.wecommit.journeyplanning;
 
+import co.wecommit.journeyplanning.evaluators.CanTransferBetweenPlatformsEvaluator;
 import co.wecommit.journeyplanning.evaluators.IsValidLegEvaluator;
+import co.wecommit.journeyplanning.evaluators.ValidJourneyEvaluator;
+import co.wecommit.journeyplanning.expanders.JourneyExpander;
+import co.wecommit.journeyplanning.results.Journey;
 import org.neo4j.graphdb.*;
 import org.neo4j.graphdb.traversal.*;
 
@@ -10,12 +14,17 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 
+
+import static co.wecommit.journeyplanning.Utils.*;
+
 /**
  * Created by adam on 07/09/2017.
  */
 public class FindServices {
 
     private GraphDatabaseService graph;
+
+    private final int max_waiting_time = 30;
 
     private static final Label Station = Labels.Station;
 
@@ -29,6 +38,7 @@ public class FindServices {
 
         return between(origin, destination, depart_after, arrive_before, threshold);
     }
+
 
     /**
      *
@@ -76,94 +86,57 @@ public class FindServices {
     public ArrayList<Journey> between(Node origin, Node destination, Long depart_after, Long arrive_before, Long threshold) {
         ArrayList<Journey> output = new ArrayList<Journey>();
 
-
+        // Get all valid start legs
         ArrayList<Node> starting = getStartLegs(origin, "departs_at", depart_after, depart_after + threshold);
+        ArrayList<Node> ending = getEndLegs(destination, "arrives_at", arrive_before - threshold, arrive_before);
 
         for ( Node start_leg : starting ) {
-            // Get all endings that depart after this leg this but before the arrival time
-            Object departs_at = start_leg.getProperty("departs_at");
-
-            ArrayList<Node> ending = getEndLegs(destination, "arrives_at", arrive_before - threshold, arrive_before);
-
-            System.out.println(start_leg.getId() + " - "+ ending.size());
-
             for ( Node end_leg : ending ) {
-                System.out.println("to: "+ end_leg.getId());
+                // Single leg journey
+                if (starting.equals(ending)) {
+                    ArrayList<HashMap<String, Object>> legs = new ArrayList<>();
+                }
 
-                ArrayList<HashMap<String, Node>> legs = new ArrayList<>();
+                Traverser paths = getPathsBetween(start_leg, end_leg);
+
+                System.out.println("START: "+ start_leg.getId());
+                System.out.println("END:   "+ end_leg.getId());
 
                 for ( Path route : getPathsBetween(start_leg, end_leg) ) {
+                    ArrayList<HashMap<String, Object>> legs = new ArrayList<>();
+
+                    System.out.println("");
+                    System.out.println("");
+                    System.out.println("");
+                    System.out.println("Res");
+                    System.out.println("");
+
+                    print(route);
+                    System.out.println("");
+                    System.out.println("");
+                    System.out.println("");
+
                     for ( Node leg : route.nodes() ) {
-                        HashMap<String, Node> details = getLegDetails(leg);
+                        HashMap<String, Object> details = getLegDetails(leg);
 
-                        legs.add(details);
+                        if ( details != null ) {
+                            legs.add(details);
+                        }
                     }
-                }
 
-                if ( legs.size() > 0 ) {
-                    Journey journey = new Journey(origin, destination, legs);
-                    output.add(journey);
+                    if ( legs.size() > 0 ) {
+                        Journey journey = new Journey(origin, destination, legs);
+                        output.add(journey);
+                    }
+
                 }
             }
+
         }
 
         return output;
     }
 
-    public static class Journey {
-
-        private final Node origin;
-
-        private final Node destination;
-
-        private final ArrayList<HashMap<String, Node>> legs;
-
-        public Journey(Node origin, Node destination, ArrayList<HashMap<String, Node>> legs) {
-            this.origin = origin;
-            this.destination = destination;
-            this.legs = legs;
-        }
-
-        private Date getDate(Node node, String property) {
-            Long value = ((Number) node.getProperty(property,0)).longValue();
-
-            return new Date( value * 60 * 1000 );
-        }
-
-        public String toString() {
-            String output = "\n\nJourney: "+ origin.getProperty("name") + " to "+ destination.getProperty("name") + "\n--\n";
-
-            SimpleDateFormat time = new SimpleDateFormat("HH:mm");
-
-            for (HashMap<String, Node> leg : legs) {
-                Node leg_node = leg.get("leg");
-                Node station = leg.get("station");
-                Node platform = leg.get("platform");
-
-                Date departs_at = getDate(leg_node, "departs_at");
-
-                output += "-- "+ time.format(departs_at);
-                output += " " + station.getProperty("name") + " P. "+ platform.getProperty("number");
-
-
-                output += "\n";
-            }
-
-            output += "\n";
-            output += "\n";
-
-            HashMap<String, Node> last_leg = legs.get(legs.size() - 1);
-
-            Date arrives_at = getDate(last_leg.get("leg"), "arrives_at");
-
-            output += "Arrives at "+ destination.getProperty("name") + " at "+ time.format(arrives_at);
-
-            output += "\n--\n\n";
-
-            return output;
-
-        }
-    }
 
     /**
      * Get all valid paths between two legs
@@ -173,12 +146,18 @@ public class FindServices {
      * @return
      */
     private Traverser getPathsBetween(Node start_leg, Node end_leg) {
-        BidirectionalJourneyExpander biExpander = new BidirectionalJourneyExpander();
+        InitialBranchState.State<Long> state = new InitialBranchState.State<>(
+                (Long) getLong(start_leg, "departs_at"),
+                (Long) getLong(end_leg, "arrives_at")
+        );
+
+        JourneyExpander biExpander = new JourneyExpander();
 
         TraversalDescription traversal = graph.traversalDescription()
                 .depthFirst()
-                .expand(biExpander)
-                .uniqueness(Uniqueness.NODE_PATH);
+                .expand(biExpander, state)
+                .uniqueness(Uniqueness.NODE_PATH)
+                .evaluator( new ValidJourneyEvaluator(start_leg, end_leg) );
 
         BidirectionalTraversalDescription bidirerectional = graph.bidirectionalTraversalDescription()
                 .mirroredSides(traversal);
@@ -240,25 +219,35 @@ public class FindServices {
     /**
      * Get the station, leg, service and operator for a leg
      *
-     * @param leg
+     * @param node
      * @return
      */
-    private HashMap<String, Node> getLegDetails(Node leg) {
-        HashMap<String, Node> output = new HashMap<String, Node>();
+    private HashMap<String, Object> getLegDetails(Node node) {
+        HashMap<String, Object> output = new HashMap<>();
 
-        output.put("leg", leg);
 
-        // Get Service
-        Node service = leg.getSingleRelationship(Relationships.HAS_LEG, Direction.INCOMING).getStartNode();
-        output.put("service", service);
+        if ( node.hasLabel(Labels.Leg) ) {
+            output.put("type", "leg");
 
-        // Get Platform
-        Node platform = leg.getSingleRelationship(Relationships.CAN_BOARD, Direction.INCOMING).getStartNode();
-        output.put("platform", platform);
+            output.put("leg", node);
 
-        // Get Station
-        Node station = platform.getSingleRelationship(Relationships.HAS_PLATFORM, Direction.INCOMING).getStartNode();
-        output.put("station", station);
+            // Get Service
+            Node service = node.getSingleRelationship(Relationships.HAS_LEG, Direction.INCOMING).getStartNode();
+            output.put("service", service);
+
+            // Get Platform
+            Node platform = node.getSingleRelationship(Relationships.CAN_BOARD, Direction.INCOMING).getStartNode();
+            output.put("platform", platform);
+
+            // Get Station
+            Node station = platform.getSingleRelationship(Relationships.HAS_PLATFORM, Direction.INCOMING).getStartNode();
+            output.put("station", station);
+        }
+        else if ( node.hasLabel(Labels.Platform) ) {
+            output.put("type", "platform_transfer");
+
+            output.put("platform", node);
+        }
 
         return output;
     }

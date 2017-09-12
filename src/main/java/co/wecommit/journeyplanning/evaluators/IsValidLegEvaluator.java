@@ -25,8 +25,6 @@ public class IsValidLegEvaluator implements Evaluator {
 
     @Override
     public Evaluation evaluate(Path path) {
-        System.out.println("Path length is "+ path.length());
-
         if ( path.length() < length ) {
             return Evaluation.EXCLUDE_AND_CONTINUE;
         }
@@ -34,7 +32,6 @@ public class IsValidLegEvaluator implements Evaluator {
         Node last = path.endNode();
 
         // Check that Node is a :Leg
-        System.out.println("Labels are "+ last.getLabels());
         if ( ! last.hasLabel(Labels.Leg) ) {
             return Evaluation.EXCLUDE_AND_PRUNE;
         }
@@ -42,15 +39,13 @@ public class IsValidLegEvaluator implements Evaluator {
         // Get the Property
         Long value = ((Number) last.getProperty(property,0)).longValue();
 
-        // Check that the property is within the bounds
-        System.out.println("Prop "+ property + " is "+ value);
-        if ( value < floor && value > ceiling ) {
-
-            return Evaluation.EXCLUDE_AND_CONTINUE;
+        // Check that the property is within the bounds, if so, include and stop the traversal
+        if ( floor <= value && value <= ceiling ) {
+            return Evaluation.INCLUDE_AND_PRUNE;
         }
-System.out.println("OK");
-        // This is OK
-        return Evaluation.INCLUDE_AND_PRUNE;
+
+        // No conditions met,
+        return Evaluation.EXCLUDE_AND_PRUNE;
     }
 
 
